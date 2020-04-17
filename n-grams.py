@@ -3,9 +3,14 @@ import math
 import numpy as np
 from random import randrange
 from tqdm import tqdm, trange
-import time
+import multiprocessing as mp
+from multiprocessing import Pool   
+import time, os
+from numba import jit, cuda 
+from stream_summary import StreamSummary
 
 # rolling hash
+@jit
 def rolling_hash(Base, bucket_size, gram,n):
 
     hash = 0
@@ -93,27 +98,56 @@ def kTop(a, n, k):
     # return top k elements 
     return top[:-1]
 
+def hash_gen(sample_list):
 
-def main():
-
-    n = 12
-    base = 3
-    bucket_size = 2**31 -19
-    s = math.ceil(n/4)
-    k = 24
-    global bucket, T 
-    T = []
-    sample_list = ['brbbot.exe','brbbot.exe']
-    print("Generating N-grams Hash")
-    for sample in tqdm(sample_list):
+    print("\nGenerating N-grams Hash")
+    for sample in (sample_list):
         with open(sample, 'rb') as f:
             bytes_array = np.array(bytearray(f.read()), dtype="uint8")
         f.close()
         grams = ngrams(bytes_array, n)
+        print(len(list(grams)))
         count = 0
-        for gram in grams:
+        print("\Processing %s N-grams Hash"%(sample))
+        for gram in tqdm(grams):
             if count == 0:
-                gen = rolling_hash(base, bucket_size, gram, n)
+                gen = rolling_hash(base, B_size, gram, n)
+                key = next(gen)
+            else:
+                next(gen)
+                key = gen.send(gram)
+            
+            if key % s == 0:
+                T.append(key)
+            count += 1
+        # T.append(grams)
+
+@jit
+def main():
+
+    global T, n, k, s, base, B_size, B_size
+    n = 6 # n-grams
+    k = 1000 # top k frequent as feature
+    s = math.ceil(n/4) # hash-stride
+    base = 3 # hash base
+    B_size = 2**31 - 19 
+    Bs_size = max(3*k, k + 300000)
+    T = []
+    # dir_prefix = "../PE_binary_dataset/Benign/"
+    # sample_list = [dir_prefix + i for i in os.listdir(dir_prefix)]
+    sample_list = ['../PE_binary_dataset/Benign/7z.exe ','../PE_binary_dataset/Benign/AcroBroker.exe']
+    print("\nGenerating N-grams Hash")
+    for sample in (sample_list):
+        with open(sample, 'rb') as f:
+            bytes_array = np.array(bytearray(f.read()), dtype="uint8")
+        f.close()
+        grams = ngrams(bytes_array, n)
+        print(len(list(grams)))
+        count = 0
+        print("\Processing %s N-grams Hash"%(sample))
+        for gram in tqdm(grams):
+            if count == 0:
+                gen = rolling_hash(base, B_size, gram, n)
                 key = next(gen)
             else:
                 next(gen)
@@ -124,33 +158,26 @@ def main():
             count += 1
         # T.append(grams)
     Top_K = kTop(T, len(T), k) 
-    # print(len(Top_K))
-    print(Top_K)
-    print("Restoring N-grams")
+    Bs = StreamSummary(Bs_size)
+    print("\nRestoring N-grams")
     for sample in tqdm(sample_list):
         with open(sample, 'rb') as f:
             bytes_array = np.array(bytearray(f.read()), dtype="uint8")
-
-
         grams = ngrams(bytes_array, n)
         count = 0
-        used_key = []
         for gram in grams:
             if count == 0:
-                gen = rolling_hash(base, bucket_size, gram, n)
+                gen = rolling_hash(base, B_size, gram, n)
                 key = next(gen)
             else:
                 next(gen)
                 key = gen.send(gram)
+        
+            if key in Top_K:
+                Bs.add(gram)
+    print(Bs)
 
-            if key in Top_K and key not in used_key:
-                used_key.append(key)
-                if count == 0:
-                    bucket = np.array([list(gram)])
-                else:
-                    bucket = np.append(bucket, [list(gram)], axis=0)
-                count += 1
-    print(bucket)
+
     # Kth_item = RSelect(T, k-1)
     # print(Kth_item)
 
@@ -161,3 +188,9 @@ if __name__ == "__main__":
     main()
     # T = [5,6,12,2.5,46,7,8,1,2,3,5,10,10,10,10,1,1,2,2]
     # print(kTop(T, len(T), 2))
+
+pool = Pool()
+pool.map(clawer,urls) 
+out1, out2, out3 = zip(*pool.map(calc_stuff, range(0, 10 * offset, offset)))
+pool.close()
+pool.join()
